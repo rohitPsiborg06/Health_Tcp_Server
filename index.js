@@ -49,6 +49,9 @@ const tcpServer = net.createServer((socket) => {
   let buffer = "";
 
   socket.on("data", (chunk) => {
+    console.log(`\n📦 Raw Packet [Length: ${chunk.length} bytes]:`);
+    console.log("HEX:", chunk.toString("hex"));
+    console.log("ASCII:", chunk.toString("latin1"));
     buffer += chunk.toString();
 
     // Extract complete packets between '[' and ']'
