@@ -150,21 +150,12 @@ const tcpServer = net.createServer((socket) => {
         const deviceId = "9024506956";
         connectedDevices.set(deviceId, socket);
 
-        // Send AQSH ACK
-        socket.write(Buffer.from("ff41515348000681000000c600", "hex"));
-        socket.write(`[3G*${deviceId}*0002*LK]`);
-        console.log("📤 Sent Handshake ACK to device!");
-
-        // Send CR command to wake up GPS and force device to send position immediately
-        setTimeout(() => {
-          if (!socket.destroyed) {
-            console.log("📍 Triggering CR (Immediate GPS Location Fix) command...");
-            socket.write(`[3G*${deviceId}*0002*CR]`);
-          }
-        }, 1500);
+        console.log(`⚠️  Received encrypted AQSH packet (${rawPacket.length} bytes) from device ${deviceId}`);
+        console.log(`ℹ️  To receive plain text [3G*...*UD], the watch supplier must configure the IMEI or encryption key must be provided.`);
 
         io.emit("deviceData", {
           protocol: "AQSH",
+          deviceId,
           rawHex: rawPacket.toString("hex"),
           receivedAt: new Date().toISOString(),
         });
