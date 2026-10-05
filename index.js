@@ -104,6 +104,18 @@ const tcpServer = net.createServer((socket) => {
 
         console.log(`📦 [AQSH PACKET RECEIVED] Length: ${rawPacket.length} bytes`);
 
+        // Send Server Handshake ACK so the watch knows the server is alive
+        const deviceId = "9024506956";
+        connectedDevices.set(deviceId, socket);
+
+        // 1. Try AQSH protocol ACK (Command 0x81 / Success 0x00)
+        const aqshAck = Buffer.from("ff41515348000681000000c600", "hex");
+        socket.write(aqshAck);
+
+        // 2. Also send standard BeeSure ACK
+        socket.write(`[3G*${deviceId}*0002*LK]`);
+        console.log("📤 Sent Handshake ACK to device!");
+
         let decryptedText = null;
         if (AES_KEY && rawPacket.length > 16) {
           try {
