@@ -1,38 +1,61 @@
 import net from "net";
 import http from "http";
-import crypto from "crypto";
 import { Server } from "socket.io";
 
 const TCP_PORT = process.env.TCP_PORT || 8000;
 const SOCKET_PORT = process.env.SOCKET_PORT || 8001;
-const AES_KEY = process.env.AES_KEY || null;
 
-// ----------------------------------------------------
-// 1. Socket.IO Server (Main Server connects here)
-// ----------------------------------------------------
+// --------------------------------------------------------------------------
+// 1. Socket.IO Server (Main Server Bridge)
+// --------------------------------------------------------------------------
 const httpServer = http.createServer();
-const io = new Server(httpServer, { cors: { origin: "*" } });
+const io = new Server(httpServer, {
+  cors: { origin: "*" },
+});
 
-// In-memory connected devices: deviceId => tcpSocket
+// In-memory active devices map: deviceId => { socket, ip, connectedAt, lastSeen }
 const connectedDevices = new Map();
 
 io.on("connection", (socket) => {
   console.log("⚡ Main Server connected via Socket.IO");
 
-  // Send Downlink Command from Main Server to Watch (e.g. CR, RESET, FIND, etc.)
-  socket.on("sendToDevice", ({ deviceId, data }) => {
-    const deviceSocket = connectedDevices.get(deviceId);
-    if (deviceSocket && !deviceSocket.destroyed) {
-      deviceSocket.write(data);
-      console.log(`📤 Sent to Device [${deviceId}]:`, data);
-    } else {
+  // Send Downlink Command from Main Server to Watch (e.g. CR, RESET, LK, etc.)
+  socket.on("sendToDevice", ({ deviceId, data, command }, callback) => {
+    const entry = connectedDevices.get(deviceId);
+    if (!entry || entry.socket.destroyed) {
       console.log(`❌ Device [${deviceId}] is not connected`);
+      if (typeof callback === "function") {
+        callback({ success: false, error: `Device ${deviceId} is offline` });
+      }
+      return;
+    }
+
+    // Format packet if raw command string is given without brackets
+    let packetToSend = data;
+    if (!packetToSend && command) {
+      const lenHex = command.length.toString(16).toUpperCase().padStart(4, "0");
+      packetToSend = `[3G*${deviceId}*${lenHex}*${command}]`;
+    }
+
+    if (packetToSend) {
+      entry.socket.write(packetToSend);
+      console.log(`📤 Sent to Device [${deviceId}]:`, packetToSend);
+      if (typeof callback === "function") {
+        callback({ success: true, sent: packetToSend });
+      }
     }
   });
 
+  // Query connected device IDs and status
   socket.on("getConnectedDevices", (callback) => {
     if (typeof callback === "function") {
-      callback(Array.from(connectedDevices.keys()));
+      const list = Array.from(connectedDevices.entries()).map(([id, info]) => ({
+        deviceId: id,
+        ip: info.ip,
+        connectedAt: info.connectedAt,
+        lastSeen: info.lastSeen,
+      }));
+      callback(list);
     }
   });
 });
@@ -41,11 +64,11 @@ httpServer.listen(SOCKET_PORT, () => {
   console.log(`📡 Socket.IO Bridge running on port ${SOCKET_PORT} (Main Server connects here)`);
 });
 
-// ----------------------------------------------------
-// 2. Parsers (Extracted from your old TCP_SERVER repository)
-// ----------------------------------------------------
+// --------------------------------------------------------------------------
+// 2. Parsers for Open BeeSure / 3G / SeTracker Protocol
+// --------------------------------------------------------------------------
 const deviceParsers = {
-  // Position Report: UD, UD_LTE, UD_WCDMA, AL, AL_LTE
+  // Position Report: UD, UD_LTE, UD_WCDMA, AL, AL_LTE, AL_WCDMA
   parsePosition: (content) => {
     const parts = content.split(",");
     if (parts.length < 13) return null;
@@ -56,8 +79,8 @@ const deviceParsers = {
       pedometer, tumbling, deviceStatusHex, ...extras
     ] = parts;
 
-    let latitude = parseFloat(rawLat) || 0;
-    let longitude = parseFloat(rawLon) || 0;
+    const latitude = parseFloat(rawLat) || 0;
+    const longitude = parseFloat(rawLon) || 0;
 
     return {
       command,
@@ -110,7 +133,7 @@ const deviceParsers = {
     };
   },
 
-  // Diagnosis / Test Status: TS
+  // Diagnostic / Status: TS
   parseTS: (content) => {
     const pairs = content.split(/[,;]/);
     const res = { command: "TS" };
@@ -122,47 +145,33 @@ const deviceParsers = {
   },
 };
 
-// ----------------------------------------------------
-// 3. TCP Server (Device connects directly here)
-// ----------------------------------------------------
+// --------------------------------------------------------------------------
+// 3. TCP Server (Smartwatch connects directly here)
+// --------------------------------------------------------------------------
 const tcpServer = net.createServer((socket) => {
   const clientAddr = `${socket.remoteAddress}:${socket.remotePort}`;
   console.log(`\n🔌 Device Connected: ${clientAddr}`);
 
+  // Keep cellular IoT connection alive through carrier NAT firewalls
+  socket.setKeepAlive(true, 30000);
+  socket.setNoDelay(true);
+
   let buffer = Buffer.alloc(0);
 
   socket.on("data", (chunk) => {
-    console.log(`\n📦 Raw Packet [Length: ${chunk.length} bytes]:`);
-    console.log("HEX:", chunk.toString("hex"));
-
     buffer = Buffer.concat([buffer, chunk]);
 
-    // Case A: 4P-Touch AQSH Protocol Header (0xFF 'A' 'Q' 'S' 'H')
-    if (buffer.length >= 7 && buffer[0] === 0xff && buffer.subarray(1, 5).toString("ascii") === "AQSH") {
-      const packetLength = buffer.readUInt16BE(5) + 5;
-      if (buffer.length >= packetLength) {
-        const rawPacket = buffer.subarray(0, packetLength);
-        buffer = buffer.subarray(packetLength);
-
-        console.log(`📦 [AQSH PACKET RECEIVED] Length: ${rawPacket.length} bytes`);
-
-        // Handshake ACK to keep device online
-        const deviceId = "9024506956";
-        connectedDevices.set(deviceId, socket);
-
-        console.log(`⚠️  Received encrypted AQSH packet (${rawPacket.length} bytes) from device ${deviceId}`);
-        console.log(`ℹ️  To receive plain text [3G*...*UD], the watch supplier must configure the IMEI or encryption key must be provided.`);
-
-        io.emit("deviceData", {
-          protocol: "AQSH",
-          deviceId,
-          rawHex: rawPacket.toString("hex"),
-          receivedAt: new Date().toISOString(),
-        });
-      }
+    // Trim noise/garbage preceding the start delimiter '['
+    const firstBracket = buffer.indexOf(0x5b); // '['
+    if (firstBracket > 0) {
+      buffer = buffer.subarray(firstBracket);
+    } else if (firstBracket === -1) {
+      // Discard buffer if it grows too large without a valid packet start
+      if (buffer.length > 4096) buffer = Buffer.alloc(0);
+      return;
     }
 
-    // Case B: Standard BeeSure / SeTracker Protocol [MANUFACTURER*ID*LEN*CONTENT]
+    // Process all framed packets: [MANUFACTURER*ID*LENGTH*CONTENT]
     let startIdx = buffer.indexOf(0x5b); // '['
     let endIdx = buffer.indexOf(0x5d);   // ']'
 
@@ -178,14 +187,20 @@ const tcpServer = net.createServer((socket) => {
         const [mfr, deviceId, lenHex, content] = parts;
         const command = content.split(",")[0];
 
-        connectedDevices.set(deviceId, socket);
+        // Register / update device connection
+        connectedDevices.set(deviceId, {
+          socket,
+          ip: clientAddr,
+          connectedAt: connectedDevices.get(deviceId)?.connectedAt || new Date().toISOString(),
+          lastSeen: new Date().toISOString(),
+        });
 
-        // Protocol Auto-ACKs
+        // Protocol Required Auto-ACKs
         if (command === "LK") socket.write(`[${mfr}*${deviceId}*0002*LK]`);
         if (command.startsWith("AL")) socket.write(`[${mfr}*${deviceId}*0002*AL]`);
         if (command === "CONFIG") socket.write(`[${mfr}*${deviceId}*0008*CONFIG,1]`);
 
-        // Clean structured parsing based on command
+        // Structured parsing
         let parsedData = null;
         if (["UD", "UD_LTE", "UD_WCDMA", "AL", "AL_LTE", "AL_WCDMA"].includes(command)) {
           parsedData = deviceParsers.parsePosition(content);
@@ -199,9 +214,10 @@ const tcpServer = net.createServer((socket) => {
           parsedData = deviceParsers.parseTS(content);
         }
 
-        // Emit clean JSON to Main Server
+        // Emit clean structured event to Main Server
         io.emit("deviceData", {
           deviceId,
+          manufacturer: mfr,
           command,
           rawPacket,
           content,
@@ -216,8 +232,8 @@ const tcpServer = net.createServer((socket) => {
   });
 
   socket.on("close", () => {
-    for (const [id, s] of connectedDevices.entries()) {
-      if (s === socket) {
+    for (const [id, info] of connectedDevices.entries()) {
+      if (info.socket === socket) {
         connectedDevices.delete(id);
         console.log(`🔌 Device [${id}] Disconnected`);
       }
@@ -225,10 +241,26 @@ const tcpServer = net.createServer((socket) => {
   });
 
   socket.on("error", (err) => {
-    console.error("Socket error:", err.message);
+    console.error(`Socket error from ${clientAddr}:`, err.message);
   });
 });
 
 tcpServer.listen(TCP_PORT, () => {
   console.log(`🛰️  TCP Server running on port ${TCP_PORT} (Devices send data here)`);
 });
+
+// --------------------------------------------------------------------------
+// 4. Graceful Shutdown
+// --------------------------------------------------------------------------
+const shutdown = () => {
+  console.log("\nShutting down gracefully...");
+  tcpServer.close(() => console.log("TCP server closed."));
+  httpServer.close(() => console.log("Socket.IO server closed."));
+  for (const { socket } of connectedDevices.values()) {
+    socket.destroy();
+  }
+  process.exit(0);
+};
+
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
