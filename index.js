@@ -42,46 +42,88 @@ httpServer.listen(SOCKET_PORT, () => {
 });
 
 // ----------------------------------------------------
-// 2. Protocol Parser Helper Functions
+// 2. Parsers (Extracted from your old TCP_SERVER repository)
 // ----------------------------------------------------
-function parseLocationPacket(content) {
-  // Format: UD/UD_LTE,date,time,status,lat,lat_dir,lon,lon_dir,speed,direction,altitude,satellites,battery,signal,...
-  const parts = content.split(",");
-  if (parts.length < 13) return null;
+const deviceParsers = {
+  // Position Report: UD, UD_LTE, UD_WCDMA, AL, AL_LTE
+  parsePosition: (content) => {
+    const parts = content.split(",");
+    if (parts.length < 13) return null;
 
-  const [cmd, date, time, status, rawLat, latDir, rawLon, lonDir, speed, direction, altitude, satellites, battery, signal] = parts;
+    const [
+      command, date, time, gpsStatus, rawLat, latDir, rawLon, lonDir,
+      speed, direction, altitude, satellites, gsmSignal, battery,
+      pedometer, tumbling, deviceStatusHex, ...extras
+    ] = parts;
 
-  let latitude = parseFloat(rawLat);
-  let longitude = parseFloat(rawLon);
+    let latitude = parseFloat(rawLat) || 0;
+    let longitude = parseFloat(rawLon) || 0;
 
-  return {
-    command: cmd,
-    date,
-    time,
-    isValid: status === "A",
-    latitude: latDir === "S" ? -latitude : latitude,
-    longitude: lonDir === "W" ? -longitude : longitude,
-    speed: parseFloat(speed) || 0,
-    direction: parseFloat(direction) || 0,
-    altitude: parseFloat(altitude) || 0,
-    satellites: parseInt(satellites, 10) || 0,
-    battery: parseInt(battery, 10) || 0,
-    signal: parseInt(signal, 10) || 0,
-  };
-}
+    return {
+      command,
+      date,
+      time,
+      isGpsValid: gpsStatus === "A",
+      latitude: latDir === "S" ? -latitude : latitude,
+      longitude: lonDir === "W" ? -longitude : longitude,
+      speed: parseFloat(speed) || 0,
+      direction: parseFloat(direction) || 0,
+      altitude: parseFloat(altitude) || 0,
+      satellites: parseInt(satellites, 10) || 0,
+      gsmSignal: parseInt(gsmSignal, 10) || 0,
+      battery: parseInt(battery, 10) || 0,
+      pedometer: parseInt(pedometer, 10) || 0,
+      tumbling: parseInt(tumbling, 10) || 0,
+      deviceStatusHex: deviceStatusHex || "0",
+    };
+  },
 
-function parseHeartbeatPacket(content) {
-  // Format: LK,step,sleep_tumbling,battery_percent
-  const parts = content.split(",");
-  return {
-    steps: parseInt(parts[1], 10) || 0,
-    sleepTumbling: parseInt(parts[2], 10) || 0,
-    battery: parseInt(parts[3], 10) || 0,
-  };
-}
+  // Heartbeat: LK
+  parseHeartbeat: (content) => {
+    const parts = content.split(",");
+    return {
+      command: "LK",
+      steps: parseInt(parts[1], 10) || 0,
+      tumbling: parseInt(parts[2], 10) || 0,
+      battery: parseInt(parts[3], 10) || 0,
+    };
+  },
+
+  // Blood Pressure & Heart Rate: bphrt
+  parseBpHrt: (content) => {
+    const [command, systolicBP, diastolicBP, heartRate] = content.split(",");
+    return {
+      command,
+      systolicBP: parseInt(systolicBP, 10) || 0,
+      diastolicBP: parseInt(diastolicBP, 10) || 0,
+      heartRate: parseInt(heartRate, 10) || 0,
+    };
+  },
+
+  // SpO2 Blood Oxygen: oxygen
+  parseSpo2: (content) => {
+    const [command, type, spo2] = content.split(",");
+    return {
+      command,
+      type,
+      spo2: parseInt(spo2, 10) || 0,
+    };
+  },
+
+  // Diagnosis / Test Status: TS
+  parseTS: (content) => {
+    const pairs = content.split(/[,;]/);
+    const res = { command: "TS" };
+    pairs.forEach((p) => {
+      const [k, v] = p.split(":");
+      if (k && v !== undefined) res[k.trim()] = v.trim();
+    });
+    return res;
+  },
+};
 
 // ----------------------------------------------------
-// 3. TCP Server (Watch connects directly here)
+// 3. TCP Server (Device connects directly here)
 // ----------------------------------------------------
 const tcpServer = net.createServer((socket) => {
   const clientAddr = `${socket.remoteAddress}:${socket.remotePort}`;
@@ -104,33 +146,18 @@ const tcpServer = net.createServer((socket) => {
 
         console.log(`📦 [AQSH PACKET RECEIVED] Length: ${rawPacket.length} bytes`);
 
-        // Send Server Handshake ACK so the watch knows the server is alive
+        // Handshake ACK to keep device online
         const deviceId = "9024506956";
         connectedDevices.set(deviceId, socket);
 
-        // 1. Try AQSH protocol ACK (Command 0x81 / Success 0x00)
-        const aqshAck = Buffer.from("ff41515348000681000000c600", "hex");
-        socket.write(aqshAck);
-
-        // 2. Also send standard BeeSure ACK
+        // Send AQSH ACK
+        socket.write(Buffer.from("ff41515348000681000000c600", "hex"));
         socket.write(`[3G*${deviceId}*0002*LK]`);
         console.log("📤 Sent Handshake ACK to device!");
-
-        let decryptedText = null;
-        if (AES_KEY && rawPacket.length > 16) {
-          try {
-            const decipher = crypto.createDecipheriv("aes-128-cbc", Buffer.from(AES_KEY, "utf8"), rawPacket.subarray(0, 16));
-            decryptedText = Buffer.concat([decipher.update(rawPacket.subarray(16)), decipher.final()]).toString("ascii");
-            console.log("🔓 Decrypted AQSH Data:", decryptedText);
-          } catch (err) {
-            console.log("Decryption pending valid AES key");
-          }
-        }
 
         io.emit("deviceData", {
           protocol: "AQSH",
           rawHex: rawPacket.toString("hex"),
-          decrypted: decryptedText,
           receivedAt: new Date().toISOString(),
         });
       }
@@ -149,7 +176,7 @@ const tcpServer = net.createServer((socket) => {
 
       const parts = rawPacket.slice(1, -1).split("*");
       if (parts.length >= 4) {
-        const [mfr, deviceId, len, content] = parts;
+        const [mfr, deviceId, lenHex, content] = parts;
         const command = content.split(",")[0];
 
         connectedDevices.set(deviceId, socket);
@@ -159,12 +186,18 @@ const tcpServer = net.createServer((socket) => {
         if (command.startsWith("AL")) socket.write(`[${mfr}*${deviceId}*0002*AL]`);
         if (command === "CONFIG") socket.write(`[${mfr}*${deviceId}*0008*CONFIG,1]`);
 
-        // Structured parsing
-        let parsed = null;
-        if (command === "UD" || command === "UD_LTE" || command === "UD2") {
-          parsed = parseLocationPacket(content);
+        // Clean structured parsing based on command
+        let parsedData = null;
+        if (["UD", "UD_LTE", "UD_WCDMA", "AL", "AL_LTE", "AL_WCDMA"].includes(command)) {
+          parsedData = deviceParsers.parsePosition(content);
         } else if (command === "LK") {
-          parsed = parseHeartbeatPacket(content);
+          parsedData = deviceParsers.parseHeartbeat(content);
+        } else if (command === "bphrt") {
+          parsedData = deviceParsers.parseBpHrt(content);
+        } else if (command === "oxygen") {
+          parsedData = deviceParsers.parseSpo2(content);
+        } else if (command === "TS") {
+          parsedData = deviceParsers.parseTS(content);
         }
 
         // Emit clean JSON to Main Server
@@ -173,7 +206,7 @@ const tcpServer = net.createServer((socket) => {
           command,
           rawPacket,
           content,
-          data: parsed,
+          data: parsedData,
           receivedAt: new Date().toISOString(),
         });
       }
@@ -200,32 +233,3 @@ const tcpServer = net.createServer((socket) => {
 tcpServer.listen(TCP_PORT, () => {
   console.log(`🛰️  TCP Server running on port ${TCP_PORT} (Devices send data here)`);
 });
-
-/*
-// ====================================================
-// [LEGACY CODE ARCHIVE - PREVIOUS BASIC IMPLEMENTATION]
-// ====================================================
-const tcpServerOld = net.createServer((socket) => {
-  let buffer = "";
-  socket.on("data", (chunk) => {
-    buffer += chunk.toString();
-    while (buffer.includes("[") && buffer.includes("]")) {
-      const start = buffer.indexOf("[");
-      const end = buffer.indexOf("]", start);
-      if (end === -1) break;
-      const rawPacket = buffer.slice(start, end + 1);
-      buffer = buffer.slice(end + 1);
-      const parts = rawPacket.slice(1, -1).split("*");
-      if (parts.length >= 4) {
-        const [mfr, deviceId, len, content] = parts;
-        const command = content.split(",")[0];
-        connectedDevices.set(deviceId, socket);
-        if (command === "LK") socket.write(`[${mfr}*${deviceId}*0002*LK]`);
-        if (command.startsWith("AL")) socket.write(`[${mfr}*${deviceId}*0002*AL]`);
-        if (command === "CONFIG") socket.write(`[${mfr}*${deviceId}*0008*CONFIG,1]`);
-        io.emit("deviceData", { deviceId, command, rawPacket, content, receivedAt: new Date().toISOString() });
-      }
-    }
-  });
-});
-*/
