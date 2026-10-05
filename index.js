@@ -155,6 +155,14 @@ const tcpServer = net.createServer((socket) => {
         socket.write(`[3G*${deviceId}*0002*LK]`);
         console.log("📤 Sent Handshake ACK to device!");
 
+        // Send CR command to wake up GPS and force device to send position immediately
+        setTimeout(() => {
+          if (!socket.destroyed) {
+            console.log("📍 Triggering CR (Immediate GPS Location Fix) command...");
+            socket.write(`[3G*${deviceId}*0002*CR]`);
+          }
+        }, 1500);
+
         io.emit("deviceData", {
           protocol: "AQSH",
           rawHex: rawPacket.toString("hex"),
