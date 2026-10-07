@@ -1,6 +1,7 @@
 import net from "net";
 import {
   TCP_PORT,
+  HTTP_PORT,
   HOST,
   INACTIVITY_TIMEOUT_MS,
   KEEPALIVE_MS,
@@ -8,12 +9,13 @@ import {
   LOG_MAX_CHARS,
 } from "./utils/config.js";
 import { START, END, getAckBody, buildPacket, sendToSocket } from "./utils/protocol.js";
+import { startHttpApi } from "./utils/api.js";
 
 // In-memory active devices map: deviceId => { socket, ip, connectedAt, lastSeen }
 const connectedDevices = new Map();
 
 // --------------------------------------------------------------------------
-// TCP Server (Smartwatch / Device connects directly here)
+// 1. TCP Server (Smartwatch / Device connects directly here)
 // --------------------------------------------------------------------------
 const tcpServer = net.createServer((socket) => {
   const clientAddr = `${socket.remoteAddress}:${socket.remotePort}`;
@@ -121,16 +123,21 @@ const tcpServer = net.createServer((socket) => {
 
 // Server-level error handler (e.g., EADDRINUSE)
 tcpServer.on("error", (err) => {
-  console.error(`❌ Server error: ${err.message}`);
+  console.error(`❌ TCP Server error: ${err.message}`);
   process.exit(1);
 });
 
 tcpServer.listen(TCP_PORT, HOST, () => {
-  console.log(`🛰️  TCP Server running on ${HOST}:${TCP_PORT} (Devices send data here)`);
+  console.log(`🛰️  TCP Server running on ${HOST}:${TCP_PORT} (Devices connect here)`);
 });
 
 // --------------------------------------------------------------------------
-// Graceful Shutdown
+// 2. HTTP REST API Server (Users / Main backend send commands here)
+// --------------------------------------------------------------------------
+const httpApiServer = startHttpApi({ connectedDevices, port: HTTP_PORT, host: HOST });
+
+// --------------------------------------------------------------------------
+// 3. Graceful Shutdown
 // --------------------------------------------------------------------------
 let isShuttingDown = false;
 const shutdown = (signal) => {
@@ -138,17 +145,14 @@ const shutdown = (signal) => {
   isShuttingDown = true;
 
   console.log(`\n🛑 ${signal} received. Shutting down gracefully...`);
-  tcpServer.close(() => {
-    console.log("TCP server closed.");
-    process.exit(0);
-  });
+  tcpServer.close(() => console.log("TCP server closed."));
+  httpApiServer.close(() => console.log("HTTP API server closed."));
 
   for (const { socket } of connectedDevices.values()) {
     socket.destroy();
   }
 
-  // Force close if sockets hang
-  setTimeout(() => process.exit(1), 5000).unref();
+  setTimeout(() => process.exit(0), 1000).unref();
 };
 
 process.on("SIGINT", () => shutdown("SIGINT"));
