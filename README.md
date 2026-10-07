@@ -1,50 +1,33 @@
-# 🛰️ TCP_SERVER_NEW (Simple & Lightweight)
+# 🛰️ TCP_SERVER_NEW
 
-A clean and simple TCP server that bridges your **GPS / IoT Device** to your **Main Server**:
+A dedicated, lightweight, and robust TCP server for direct smartwatch and IoT device communication following the Beesure / SeTracker protocol:
 
-1. **Device (GPS Watch/Tracker)** connects to raw TCP port **`8000`**.
-2. **TCP Server** extracts packets and sends automatic ACK responses (`LK`, `AL`, `CONFIG`) so the device remains online.
-3. **Socket.IO Bridge** (port **`8001`**) immediately emits the data to your Main Server:
-   ```javascript
-   io.emit("deviceData", { deviceId, command, rawPacket, content, receivedAt });
-   ```
-4. Your **Main Server** connects to `http://localhost:8001`, reads `deviceData`, and saves it to your database.
+1. **Device Connection**: Smartwatch / GPS Tracker connects directly to raw TCP port **`8000`** (configurable via `TCP_PORT`).
+2. **Packet Processing & Framing**: Extracts framed packets formatted as `[MANUFACTURER*ID*LENGTH*CONTENT]`.
+3. **Automatic Protocol ACKs**: Sends required protocol acknowledgment responses (`LK`, `AL`, `CONFIG`, `bphrt`, `oxygen`, `btemp2`, `TK`, `TKQ`, `ICCID`, etc.) directly back to the device to keep the connection persistent and prevent packet resending.
+4. **Keep-Alive & Persistence**: Configured with TCP keepalive (`30s`) and `noDelay` to handle cellular connections without timeouts.
+5. **Configurable Inactivity Timeout**: Safely cleans up dead / ghost connections after inactivity (default `20m` via `INACTIVITY_TIMEOUT_MS`).
 
 ---
 
-## 🚀 Running the Project
+## 🚀 Running the Server
 
-### 1. Start the Server (with Nodemon)
+### 1. Install Dependencies
 ```bash
+npm install
+```
+
+### 2. Configure Environment
+Copy and customize `.env`:
+```bash
+cp .env.example .env
+```
+
+### 3. Start Server
+```bash
+# Production mode
 npm start
-```
 
-### 2. Listen in your Main Server
-```javascript
-import { io } from "socket.io-client";
-
-const socket = io("http://localhost:8001");
-
-socket.on("deviceData", ({ deviceId, command, rawPacket, content }) => {
-  console.log(`Device: ${deviceId}, Command: ${command}`);
-  console.log("Raw Packet:", rawPacket);
-  console.log("Content:", content);
-
-  // 👉 Save to your MongoDB or process data here in your Main Server!
-});
-```
-
-### 3. Send Downlink Commands to Device
-```javascript
-// Send any command or raw string to a connected device via Socket.IO
-socket.emit("sendToDevice", {
-  deviceId: "8899776655",
-  data: "[3G*8899776655*0005*RESET]"
-});
-```
-
-### 4. Test Locally with Simulator
-In a separate terminal:
-```bash
-node test.js
+# Development mode (auto-reload)
+npm run dev
 ```
