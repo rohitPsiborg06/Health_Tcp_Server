@@ -10,33 +10,30 @@ export const END = 0x5d;   // ']'
  * Required auto-ACKs for Smartwatch protocol.
  * Without these, the device will resend the packet repeatedly or report upload failed.
  */
-export const ACKS = new Map(
-  Object.entries({
-    LK: "LK",
-    CONFIG: "CONFIG,1",
-    bphrt: "bphrt",
-    oxygen: "oxygen,1",
-    btemp2: "btemp2",
-    TK: "TK,1",
-    TKQ: "TKQ",
-    TKQ2: "TKQ2",
-    ICCID: "ICCID2,1",
-    ICCID1: "ICCID2,1",
-    GETFACEOPEN: "GETFACEOPEN,0",
-    appcontacttel: "appcontacttel,0",
-    DSSYNCUP: "DSSYNCUP,1",
-    WIFIINFOUP: "WIFIINFOUP,1",
-  }),
-);
-
+export const ACKS = Object.freeze({
+  LK: "LK",
+  CONFIG: "CONFIG,1",
+  bphrt: "bphrt",
+  oxygen: "oxygen,1",
+  btemp2: "btemp2",
+  TK: "TK,1",
+  TKQ: "TKQ",
+  TKQ2: "TKQ2",
+  ICCID: "ICCID2,1",
+  ICCID1: "ICCID2,1",
+  GETFACEOPEN: "GETFACEOPEN,0",
+  appcontacttel: "appcontacttel,0",
+  DSSYNCUP: "DSSYNCUP,1",
+  WIFIINFOUP: "WIFIINFOUP,1",
+});
 
 /**
  * Resolves the acknowledgment payload body for a given command.
  * Matches AL, AL_LTE, AL_WCDMA, etc. to 'AL'.
  */
 export const getAckBody = (command) => {
-  if (/^AL(_|$)/.test(command)) return "AL";
-  return ACKS.get(command) ?? null;
+  if (command === "AL" || (command && command.startsWith("AL_"))) return "AL";
+  return ACKS[command] ?? null;
 };
 
 /**
@@ -45,7 +42,7 @@ export const getAckBody = (command) => {
  */
 export const buildPacket = (mfr, deviceId, body) => {
   let lenHex = Buffer.byteLength(body).toString(16).padStart(4, "0");
-  lenHex = LEN_LOWERCASE ? lenHex.toLowerCase() : lenHex.toUpperCase();
+  if (!LEN_LOWERCASE) lenHex = lenHex.toUpperCase();
   return `[${mfr}*${deviceId}*${lenHex}*${body}]`;
 };
 

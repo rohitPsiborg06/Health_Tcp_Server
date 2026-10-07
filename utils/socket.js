@@ -1,6 +1,6 @@
 import { Server } from "socket.io";
 import { buildPacket, sendToSocket } from "./protocol.js";
-import { API_SECRET_KEY, getCorsOrigin } from "./config.js";
+import { API_SECRET_KEY, CORS_ORIGIN } from "./config.js";
 
 let ioInstance = null;
 
@@ -11,7 +11,7 @@ let ioInstance = null;
 export const initSocket = (httpServer, connectedDevices) => {
   const io = new Server(httpServer, {
     cors: {
-      origin: getCorsOrigin(),
+      origin: CORS_ORIGIN,
       methods: ["GET", "POST"],
       credentials: true,
     },
@@ -21,9 +21,7 @@ export const initSocket = (httpServer, connectedDevices) => {
 
   // Handshake Authentication Middleware
   io.use((socket, next) => {
-    if (!API_SECRET_KEY) {
-      return next();
-    }
+    if (!API_SECRET_KEY) return next();
 
     const token =
       socket.handshake.auth?.token ||
@@ -45,6 +43,7 @@ export const initSocket = (httpServer, connectedDevices) => {
     socket.on("sendToDevice", ({ deviceId, command, raw, mfr = "3G" }, callback) => {
       const entry = connectedDevices?.get(deviceId);
       if (!entry || entry.socket.destroyed) {
+        if (entry) connectedDevices.delete(deviceId);
         if (typeof callback === "function") {
           callback({ success: false, error: `Device [${deviceId}] is offline` });
         }
@@ -79,10 +78,10 @@ export const initSocket = (httpServer, connectedDevices) => {
 
 /**
  * Broadcasts incoming smartwatch packet to all connected backend listeners
- * @param {Object} data - { deviceId, mfr, command, content, rawPacket, receivedAt }
+ * Only executes if at least one client is connected
  */
 export const broadcastDeviceData = (data) => {
-  if (ioInstance) {
+  if (ioInstance && ioInstance.engine.clientsCount > 0) {
     ioInstance.emit("deviceData", data);
   }
 };

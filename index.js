@@ -12,6 +12,8 @@ import { START, END, getAckBody, buildPacket, sendToSocket } from "./utils/proto
 import { startHttpApi } from "./utils/api.js";
 import { initSocket, broadcastDeviceData, closeSocket } from "./utils/socket.js";
 
+const EMPTY_BUFFER = Buffer.alloc(0);
+
 // In-memory active devices map: deviceId => { socket, ip, connectedAt, lastSeen }
 const connectedDevices = new Map();
 
@@ -36,15 +38,16 @@ const tcpServer = net.createServer((socket) => {
     });
   }
 
-  let buffer = Buffer.alloc(0);
+  let buffer = EMPTY_BUFFER;
 
   socket.on("data", (chunk) => {
-    buffer = Buffer.concat([buffer, chunk]);
+    // Zero-allocation: only concatenate if buffer has pending fragmented data
+    buffer = buffer.length > 0 ? Buffer.concat([buffer, chunk]) : chunk;
 
     // Protect against buffer bloat / dirty noise
     if (buffer.length > MAX_BUFFER_SIZE) {
       console.warn(`⚠️ Buffer overflow from ${clientAddr}, resetting buffer.`);
-      buffer = Buffer.alloc(0);
+      buffer = EMPTY_BUFFER;
       return;
     }
 
@@ -52,7 +55,7 @@ const tcpServer = net.createServer((socket) => {
     while (true) {
       const startIdx = buffer.indexOf(START);
       if (startIdx === -1) {
-        if (buffer.length > 4096) buffer = Buffer.alloc(0);
+        if (buffer.length > 4096) buffer = EMPTY_BUFFER;
         break;
       }
 
@@ -78,9 +81,10 @@ const tcpServer = net.createServer((socket) => {
 
       const parts = rawPacket.slice(1, -1).split("*");
       if (parts.length >= 4) {
-        const [mfr, deviceId, lenHex, ...rest] = parts;
+        const [mfr, deviceId, , ...rest] = parts;
         const content = rest.join("*");
         const command = content.split(",")[0];
+        const now = new Date().toISOString();
 
         socket.deviceId = deviceId;
 
@@ -94,8 +98,8 @@ const tcpServer = net.createServer((socket) => {
         connectedDevices.set(deviceId, {
           socket,
           ip: clientAddr,
-          connectedAt: existing?.connectedAt || new Date().toISOString(),
-          lastSeen: new Date().toISOString(),
+          connectedAt: existing?.connectedAt || now,
+          lastSeen: now,
         });
 
         // Send required protocol auto-ACK
@@ -111,9 +115,14 @@ const tcpServer = net.createServer((socket) => {
           command,
           content,
           rawPacket,
-          receivedAt: new Date().toISOString(),
+          receivedAt: now,
         });
       }
+    }
+
+    // Release underlying ArrayBuffer slice for immediate V8 GC if buffer is drained
+    if (buffer.length === 0) {
+      buffer = EMPTY_BUFFER;
     }
   });
 

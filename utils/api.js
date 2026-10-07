@@ -1,21 +1,13 @@
 import express from "express";
 import cors from "cors";
 import { buildPacket, sendToSocket } from "./protocol.js";
-import { API_SECRET_KEY, getCorsOrigin } from "./config.js";
+import { API_SECRET_KEY, CORS_ORIGIN } from "./config.js";
 
 /**
- * Authentication middleware for HTTP routes
+ * Authentication middleware for protected HTTP routes
  */
 const authMiddleware = (req, res, next) => {
-  // Public health check route
-  if (req.path === "/" || req.path === "/health") {
-    return next();
-  }
-
-  // If no secret key is set, bypass auth
-  if (!API_SECRET_KEY) {
-    return next();
-  }
+  if (!API_SECRET_KEY) return next();
 
   // Extract key from 'x-api-key' or 'Authorization: Bearer <token>'
   const clientKey =
@@ -41,7 +33,7 @@ export const startHttpApi = ({ connectedDevices, port, host }) => {
   // CORS Configuration
   app.use(
     cors({
-      origin: getCorsOrigin(),
+      origin: CORS_ORIGIN,
       methods: ["GET", "POST", "OPTIONS"],
       allowedHeaders: ["Content-Type", "x-api-key", "Authorization"],
       credentials: true,
@@ -50,10 +42,7 @@ export const startHttpApi = ({ connectedDevices, port, host }) => {
 
   app.use(express.json());
 
-  // Apply API Key security middleware
-  app.use(authMiddleware);
-
-  // 1. Health check (Public)
+  // 1. Health check (Public - no auth overhead)
   app.get(["/", "/health"], (req, res) => {
     res.json({
       status: "ok",
@@ -61,6 +50,9 @@ export const startHttpApi = ({ connectedDevices, port, host }) => {
       timestamp: new Date().toISOString(),
     });
   });
+
+  // Apply API Key security middleware to all following API endpoints
+  app.use(authMiddleware);
 
   // 2. List all connected devices (Protected)
   app.get("/api/devices", (req, res) => {
@@ -78,6 +70,7 @@ export const startHttpApi = ({ connectedDevices, port, host }) => {
     const { deviceId } = req.params;
     const info = connectedDevices.get(deviceId);
     if (!info || info.socket.destroyed) {
+      if (info) connectedDevices.delete(deviceId);
       return res.status(404).json({
         success: false,
         deviceId,
@@ -105,6 +98,7 @@ export const startHttpApi = ({ connectedDevices, port, host }) => {
 
     const entry = connectedDevices.get(deviceId);
     if (!entry || entry.socket.destroyed) {
+      if (entry) connectedDevices.delete(deviceId);
       return res.status(404).json({
         success: false,
         deviceId,

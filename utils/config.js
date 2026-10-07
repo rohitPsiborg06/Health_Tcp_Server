@@ -18,12 +18,13 @@ export const LEN_LOWERCASE = process.env.LEN_LOWERCASE === "1";
 export const API_SECRET_KEY = process.env.API_SECRET_KEY || "ehc_tcp_secret_key_2026";
 
 /**
- * Parses CORS origins: supports "*" (all), single domain, or comma-separated list
- * e.g.: "http://localhost:3000,http://localhost:5173,https://myfrontend.com"
+ * Pre-parsed CORS origin: supports "*" (all), single domain, or array of domains
  */
-export const getCorsOrigin = () => {
-    const raw = process.env.CORS_ORIGIN || "*";
-    if (!raw || raw.trim() === "*") return true;
-    const list = raw.split(",").map((o) => o.trim()).filter(Boolean);
-    return list.length === 1 ? list[0] : list;
+const parseCorsOrigin = () => {
+  const raw = process.env.CORS_ORIGIN || "*";
+  if (!raw || raw.trim() === "*") return true;
+  const list = raw.split(",").map((o) => o.trim()).filter(Boolean);
+  return list.length === 1 ? list[0] : list;
 };
+
+export const CORS_ORIGIN = parseCorsOrigin();
