@@ -55,6 +55,7 @@ export const buildPacket = (mfr, deviceId, body) => {
 export const sendToSocket = (socket, payload) => {
   if (socket && socket.writable && !socket.destroyed) {
     socket.write(payload);
+    console.log(`🚀 [SERVER RESP]: ${payload}`);
     return true;
   }
   return false;
