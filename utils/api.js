@@ -1,6 +1,36 @@
 import express from "express";
 import cors from "cors";
 import { buildPacket, sendToSocket } from "./protocol.js";
+import { API_SECRET_KEY, getCorsOrigin } from "./config.js";
+
+/**
+ * Authentication middleware for HTTP routes
+ */
+const authMiddleware = (req, res, next) => {
+  // Public health check route
+  if (req.path === "/" || req.path === "/health") {
+    return next();
+  }
+
+  // If no secret key is set, bypass auth
+  if (!API_SECRET_KEY) {
+    return next();
+  }
+
+  // Extract key from 'x-api-key' or 'Authorization: Bearer <token>'
+  const clientKey =
+    req.headers["x-api-key"] ||
+    req.headers["authorization"]?.replace(/^Bearer\s+/i, "").trim();
+
+  if (!clientKey || clientKey !== API_SECRET_KEY) {
+    return res.status(401).json({
+      success: false,
+      error: "Unauthorized: Missing or invalid API key. Provide via 'x-api-key' header or 'Authorization: Bearer <token>'",
+    });
+  }
+
+  next();
+};
 
 /**
  * Starts Express HTTP REST API Server
@@ -8,11 +38,22 @@ import { buildPacket, sendToSocket } from "./protocol.js";
 export const startHttpApi = ({ connectedDevices, port, host }) => {
   const app = express();
 
-  // Middleware
-  app.use(cors());
+  // CORS Configuration
+  app.use(
+    cors({
+      origin: getCorsOrigin(),
+      methods: ["GET", "POST", "OPTIONS"],
+      allowedHeaders: ["Content-Type", "x-api-key", "Authorization"],
+      credentials: true,
+    }),
+  );
+
   app.use(express.json());
 
-  // 1. Health check
+  // Apply API Key security middleware
+  app.use(authMiddleware);
+
+  // 1. Health check (Public)
   app.get(["/", "/health"], (req, res) => {
     res.json({
       status: "ok",
@@ -21,7 +62,7 @@ export const startHttpApi = ({ connectedDevices, port, host }) => {
     });
   });
 
-  // 2. List all connected devices
+  // 2. List all connected devices (Protected)
   app.get("/api/devices", (req, res) => {
     const list = Array.from(connectedDevices.entries()).map(([id, info]) => ({
       deviceId: id,
@@ -32,7 +73,7 @@ export const startHttpApi = ({ connectedDevices, port, host }) => {
     res.json({ success: true, count: list.length, devices: list });
   });
 
-  // 3. Single device status
+  // 3. Single device status (Protected)
   app.get("/api/device/:deviceId", (req, res) => {
     const { deviceId } = req.params;
     const info = connectedDevices.get(deviceId);
@@ -54,7 +95,7 @@ export const startHttpApi = ({ connectedDevices, port, host }) => {
     });
   });
 
-  // 4. Send command to device: POST /api/device/command
+  // 4. Send command to device: POST /api/device/command (Protected)
   app.post(["/api/device/command", "/api/device/send"], (req, res) => {
     const { deviceId, command, raw, mfr = "3G" } = req.body || {};
 

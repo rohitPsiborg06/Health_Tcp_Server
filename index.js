@@ -10,6 +10,7 @@ import {
 } from "./utils/config.js";
 import { START, END, getAckBody, buildPacket, sendToSocket } from "./utils/protocol.js";
 import { startHttpApi } from "./utils/api.js";
+import { initSocket, broadcastDeviceData, closeSocket } from "./utils/socket.js";
 
 // In-memory active devices map: deviceId => { socket, ip, connectedAt, lastSeen }
 const connectedDevices = new Map();
@@ -102,6 +103,16 @@ const tcpServer = net.createServer((socket) => {
         if (ackBody) {
           sendToSocket(socket, buildPacket(mfr, deviceId, ackBody));
         }
+
+        // Stream real-time data to connected Socket.IO consumers (e.g. NestJS / DB service)
+        broadcastDeviceData({
+          deviceId,
+          mfr,
+          command,
+          content,
+          rawPacket,
+          receivedAt: new Date().toISOString(),
+        });
       }
     }
   });
@@ -137,7 +148,12 @@ tcpServer.listen(TCP_PORT, HOST, () => {
 const httpApiServer = startHttpApi({ connectedDevices, port: HTTP_PORT, host: HOST });
 
 // --------------------------------------------------------------------------
-// 3. Graceful Shutdown
+// 3. Socket.IO Realtime Data Stream (Backend connects here to save in DB)
+// --------------------------------------------------------------------------
+initSocket(httpApiServer, connectedDevices);
+
+// --------------------------------------------------------------------------
+// 4. Graceful Shutdown
 // --------------------------------------------------------------------------
 let isShuttingDown = false;
 const shutdown = (signal) => {
@@ -146,6 +162,7 @@ const shutdown = (signal) => {
 
   console.log(`\n🛑 ${signal} received. Shutting down gracefully...`);
   tcpServer.close(() => console.log("TCP server closed."));
+  closeSocket();
   httpApiServer.close(() => console.log("HTTP API server closed."));
 
   for (const { socket } of connectedDevices.values()) {
