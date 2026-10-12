@@ -1,4 +1,5 @@
 import { Queue } from "bullmq";
+import Redis from "ioredis";
 import {
   REDIS_HOST,
   REDIS_PORT,
@@ -8,19 +9,31 @@ import {
 } from "./config.js";
 
 let telemetryQueue = null;
+let redisConnection = null;
 
 let lastErrorLogTime = 0;
 const ERROR_LOG_INTERVAL_MS = 10000; // Log at most once every 10s if Redis is down
 
 if (ENABLE_QUEUE) {
   try {
+    redisConnection = new Redis({
+      host: REDIS_HOST,
+      port: REDIS_PORT,
+      ...(REDIS_PASSWORD ? { password: REDIS_PASSWORD } : {}),
+      maxRetriesPerRequest: null,
+      enableReadyCheck: false,
+    });
+
+    redisConnection.on("error", (err) => {
+      const now = Date.now();
+      if (now - lastErrorLogTime > ERROR_LOG_INTERVAL_MS) {
+        lastErrorLogTime = now;
+        console.error(`❌ [Redis Connection Error]:`, err.message);
+      }
+    });
+
     telemetryQueue = new Queue(QUEUE_NAME, {
-      connection: {
-        host: REDIS_HOST,
-        port: REDIS_PORT,
-        ...(REDIS_PASSWORD ? { password: REDIS_PASSWORD } : {}),
-        maxRetriesPerRequest: null,
-      },
+      connection: redisConnection,
     });
 
     telemetryQueue.on("error", (err) => {
@@ -89,6 +102,9 @@ export const closeQueue = async () => {
   if (telemetryQueue) {
     try {
       await telemetryQueue.close();
+      if (redisConnection) {
+        await redisConnection.quit();
+      }
       console.log(`📦 Queue [${QUEUE_NAME}] closed.`);
     } catch (err) {
       console.error("Error closing queue:", err.message);
