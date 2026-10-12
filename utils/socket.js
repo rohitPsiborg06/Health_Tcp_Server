@@ -41,6 +41,15 @@ export const initSocket = (httpServer, connectedDevices) => {
 
     // Allow authenticated backend to send downlink commands via socket event
     socket.on("sendToDevice", ({ deviceId, command, raw, mfr = "3G" }, callback) => {
+      // Safeguard: Never send bare 'SOS' back to watch (it causes an infinite ACK ping-pong loop)
+      if (command === "SOS" || (typeof raw === "string" && raw.toUpperCase().endsWith("*SOS]"))) {
+        console.warn(`⚠️ [LOOP PREVENTED] Blocked sending bare 'SOS' to device [${deviceId}].`);
+        if (typeof callback === "function") {
+          callback({ success: false, error: "Bare SOS downlink command blocked (infinite loop prevention)" });
+        }
+        return;
+      }
+
       const entry = connectedDevices?.get(deviceId);
       if (!entry || entry.socket.destroyed) {
         if (entry) connectedDevices.delete(deviceId);

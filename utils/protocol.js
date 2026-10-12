@@ -72,6 +72,11 @@ export const buildPacket = (mfr, deviceId, body) => {
  */
 export const sendToSocket = (socket, payload) => {
   if (socket && socket.writable && !socket.destroyed) {
+    // Fail-safe: Smartwatches must never receive bare [MFR*ID*LEN*SOS] back from server
+    if (typeof payload === "string" && /\[[^*]+\*[^*]+\*[0-9a-fA-F]{4}\*SOS\]/i.test(payload)) {
+      console.warn(`🛑 [LOOP SUPPRESSED] Blocked sending bare SOS packet to device: ${payload}`);
+      return false;
+    }
     socket.write(payload);
     console.log(`🚀 [SERVER RESP]: ${payload}`);
     return true;
