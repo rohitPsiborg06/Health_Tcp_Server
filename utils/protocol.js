@@ -36,6 +36,27 @@ export const getAckBody = (command) => {
   return ACKS[command] ?? null;
 };
 
+export const PROCESSABLE_COMMANDS = new Set([
+  "UD",
+  "UD_LTE",
+  "UD_WCDMA",
+  "AL",
+  "AL_LTE",
+  "AL_WCDMA",
+  "LK",
+  "TS",
+  "SOS",
+]);
+
+
+// Checks if incoming command needs to be queued & saved.
+
+export const shouldProcessCommand = (command) => {
+  if (!command) return false;
+  return PROCESSABLE_COMMANDS.has(command);
+};
+
+
 /**
  * Builds a standard smartwatch framed protocol packet:
  * [MANUFACTURER*DEVICE_ID*HEX_LEN*BODY]

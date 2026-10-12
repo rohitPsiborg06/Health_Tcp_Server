@@ -8,9 +8,12 @@ import {
   MAX_BUFFER_SIZE,
   LOG_MAX_CHARS,
 } from "./utils/config.js";
-import { START, END, getAckBody, buildPacket, sendToSocket } from "./utils/protocol.js";
+import { START, END, getAckBody, buildPacket, sendToSocket, shouldProcessCommand } from "./utils/protocol.js";
+
 import { startHttpApi } from "./utils/api.js";
 import { initSocket, broadcastDeviceData, closeSocket } from "./utils/socket.js";
+import { enqueueDevicePacket, closeQueue } from "./utils/queue.js";
+
 
 const EMPTY_BUFFER = Buffer.alloc(0);
 
@@ -102,23 +105,35 @@ const tcpServer = net.createServer((socket) => {
           lastSeen: now,
         });
 
-        // Send required protocol auto-ACK
+        // Send required protocol auto-ACK (keeps the watch connected & stable)
         const ackBody = getAckBody(command);
         if (ackBody) {
           sendToSocket(socket, buildPacket(mfr, deviceId, ackBody));
         }
 
-        // Stream real-time data to connected Socket.IO consumers (e.g. NestJS / DB service)
-        broadcastDeviceData({
+        // Filter: only proceed if this command carries actionable data (GPS, Alarms, LK, TS, SOS)
+        if (!shouldProcessCommand(command)) {
+          continue;
+        }
+
+
+        const deviceData = {
           deviceId,
           mfr,
           command,
           content,
           rawPacket,
           receivedAt: now,
-        });
+        };
+
+        // 1. Push to persistent queue (Zero data loss, auto retries, priority ordering)
+        enqueueDevicePacket(deviceData);
+
+        // 2. Stream real-time data to connected Socket.IO consumers (backwards-compatible)
+        broadcastDeviceData(deviceData);
       }
     }
+
 
     // Release underlying ArrayBuffer slice for immediate V8 GC if buffer is drained
     if (buffer.length === 0) {
@@ -172,7 +187,9 @@ const shutdown = (signal) => {
   console.log(`\n🛑 ${signal} received. Shutting down gracefully...`);
   tcpServer.close(() => console.log("TCP server closed."));
   closeSocket();
+  closeQueue();
   httpApiServer.close(() => console.log("HTTP API server closed."));
+
 
   for (const { socket } of connectedDevices.values()) {
     socket.destroy();
