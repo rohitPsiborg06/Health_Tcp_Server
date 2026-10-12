@@ -34,6 +34,7 @@ export const CORS_ORIGIN = parseCorsOrigin();
 // --------------------------------------------------------------------------
 export const REDIS_HOST = process.env.REDIS_HOST || "127.0.0.1";
 export const REDIS_PORT = Number(process.env.REDIS_PORT) || 6379;
+export const REDIS_USERNAME = process.env.REDIS_USERNAME || undefined;
 export const REDIS_PASSWORD = process.env.REDIS_PASSWORD || undefined;
 export const QUEUE_NAME = process.env.QUEUE_NAME || "telemetry-queue";
 export const ENABLE_QUEUE = process.env.ENABLE_QUEUE !== "false";

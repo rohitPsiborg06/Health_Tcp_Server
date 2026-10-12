@@ -3,6 +3,7 @@ import Redis from "ioredis";
 import {
   REDIS_HOST,
   REDIS_PORT,
+  REDIS_USERNAME,
   REDIS_PASSWORD,
   QUEUE_NAME,
   ENABLE_QUEUE,
@@ -19,6 +20,7 @@ if (ENABLE_QUEUE) {
     redisConnection = new Redis({
       host: REDIS_HOST,
       port: REDIS_PORT,
+      ...(REDIS_USERNAME ? { username: REDIS_USERNAME } : {}),
       ...(REDIS_PASSWORD ? { password: REDIS_PASSWORD } : {}),
       maxRetriesPerRequest: null,
       enableReadyCheck: false,
