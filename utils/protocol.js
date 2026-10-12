@@ -45,7 +45,6 @@ export const PROCESSABLE_COMMANDS = new Set([
   "AL_WCDMA",
   "LK",
   "TS",
-  "SOS",
 ]);
 
 

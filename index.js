@@ -111,7 +111,13 @@ const tcpServer = net.createServer((socket) => {
           sendToSocket(socket, buildPacket(mfr, deviceId, ackBody));
         }
 
-        // Filter: only proceed if this command carries actionable data (GPS, Alarms, LK, TS, SOS)
+        // If device sent SOS confirmation (ACK), settings applied successfully. End right here!
+        if (command === "SOS") {
+          console.log(`✅ [COMMAND SUCCESS]: Device [${deviceId}] successfully saved SOS configuration. Finished.`);
+          continue;
+        }
+
+        // Filter: only proceed if this command carries actionable data (GPS, Alarms, LK, TS)
         if (!shouldProcessCommand(command)) {
           continue;
         }
